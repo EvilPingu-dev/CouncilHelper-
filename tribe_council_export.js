@@ -12,11 +12,13 @@
         commandAccess: new Map(),
         scavenge: new Map(),
         farm: new Map(),
-        output: "",
+        rows: [],
+        csvOutput: "",
+        htmlOutput: "",
         settings: {
             tribe: "",
             maxPages: DEFAULT_MAX_PAGES,
-            allRankingTribes: false,
+            checkFriendCommands: true,
             falseCommandNote: ""
         }
     };
@@ -36,6 +38,12 @@
         }
         return text;
     };
+    const escapeHtml = value => String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    const formatNumber = value => Number(value || 0).toLocaleString("de-DE");
 
     function buildUrl(params) {
         const url = new URL(BASE_URL);
@@ -74,6 +82,18 @@
         return allyLinks[0] || "";
     }
 
+    function parseTargetTribes(input) {
+        return input.split(/\n|,/)
+            .map(value => clean(value))
+            .filter(Boolean)
+            .map((label, index) => ({ label, normalized: normalize(label), index }));
+    }
+
+    function matchTargetTribe(tribe, targetTribes) {
+        const normalized = normalize(tribe);
+        return targetTribes.find(target => normalized.includes(target.normalized));
+    }
+
     function readPlayerFromRow(row) {
         const playerLink = row.querySelector('a[href*="screen=info_player"]');
         if (!playerLink) return null;
@@ -89,7 +109,7 @@
             return value > best ? value : best;
         }, 0);
 
-        return { id, player, points };
+        return { id, player, points, tribe: "" };
     }
 
     function parseMembers(doc) {
@@ -137,7 +157,40 @@
         return access;
     }
 
-    function parseRankingRows(doc, targetTribes, memberNames, allRankingTribes) {
+    function hasReadableCommandTable(doc) {
+        const table = doc.querySelector("#ally_content table.vis.w100, table.vis.w100, table.vis");
+        if (!table) return false;
+        return [...table.querySelectorAll("tr")].some(row => /\d+\|\d+/.test(row.textContent));
+    }
+
+    async function updateFriendCommandAccess(rows) {
+        if (!state.settings.checkFriendCommands) return;
+
+        const candidates = rows
+            .filter(row => row.id && !state.commandAccess.get(row.player))
+            .filter((row, index, all) => all.findIndex(item => item.player === row.player) === index);
+
+        for (let index = 0; index < candidates.length; index++) {
+            const row = candidates[index];
+            setProgress(`Checking shared commands ${index + 1}/${candidates.length}`);
+            try {
+                const doc = await fetchDoc(buildUrl({ screen: "ally", mode: "members_troops", player_id: row.id }));
+                if (hasReadableCommandTable(doc)) {
+                    state.commandAccess.set(row.player, true);
+                } else if (!state.commandAccess.has(row.player)) {
+                    state.commandAccess.set(row.player, false);
+                }
+            } catch (error) {
+                console.warn("Command check failed", row.player, error);
+                if (!state.commandAccess.has(row.player)) {
+                    state.commandAccess.set(row.player, false);
+                }
+            }
+            await wait(REQUEST_DELAY);
+        }
+    }
+
+    function parseRankingRows(doc, targetTribes) {
         const rows = [];
         const tables = [doc.querySelector("#in_a_day_ranking_table"), ...doc.querySelectorAll("table.vis")].filter(Boolean);
 
@@ -146,28 +199,30 @@
                 const cells = row.querySelectorAll("td");
                 if (cells.length < 4) continue;
 
-                const player = clean(cells[1]?.querySelector('a[href*="screen=info_player"]')?.textContent || cells[1]?.textContent);
+                const playerLink = cells[1]?.querySelector('a[href*="screen=info_player"]');
+                const player = clean(playerLink?.textContent || cells[1]?.textContent);
+                const playerHref = playerLink ? new URL(playerLink.getAttribute("href"), location.origin) : null;
+                const id = playerHref?.searchParams.get("id") || playerHref?.searchParams.get("player_id") || "";
                 const ally = clean(cells[2]?.querySelector('a[href*="screen=info_ally"]')?.textContent || cells[2]?.textContent);
                 const points = parseNumber(cells[3]?.textContent);
                 if (!player || !points) continue;
 
-                const playerMatches = memberNames.size > 0 && memberNames.has(player);
-                const tribeMatches = targetTribes.length > 0 && targetTribes.some(target => normalize(ally).includes(target));
-                if (!allRankingTribes && !playerMatches && !tribeMatches) continue;
+                const target = matchTargetTribe(ally, targetTribes);
+                if (!target) continue;
 
-                rows.push({ player, ally, points });
+                rows.push({ player, id, ally, target, points });
             }
         }
 
         return rows;
     }
 
-    async function scanRanking(type, targetTribes, memberNames, allRankingTribes, maxPages) {
+    async function scanRanking(type, targetTribes, maxPages) {
         const result = new Map();
         for (let page = 0; page < maxPages; page++) {
             setProgress(`Scanning ${type}, page ${page + 1}/${maxPages}`);
             const doc = await fetchDoc(buildUrl({ screen: "ranking", mode: "in_a_day", type, offset: page * 25 }));
-            const rows = parseRankingRows(doc, targetTribes, memberNames, allRankingTribes);
+            const rows = parseRankingRows(doc, targetTribes);
             if (!rows.length && page > 2) break;
             for (const row of rows) {
                 if (!result.has(row.player) || row.points > result.get(row.player).points) {
@@ -179,11 +234,11 @@
         return result;
     }
 
-    async function scanFarm(targetTribes, memberNames, allRankingTribes, maxPages) {
+    async function scanFarm(targetTribes, maxPages) {
         let best = new Map();
         let bestType = FARM_TYPES[0];
         for (const type of FARM_TYPES) {
-            const data = await scanRanking(type, targetTribes, memberNames, allRankingTribes, Math.min(maxPages, 8));
+            const data = await scanRanking(type, targetTribes, Math.min(maxPages, 8));
             if (data.size > best.size) {
                 best = data;
                 bestType = type;
@@ -192,22 +247,43 @@
         }
 
         if (maxPages > 8) {
-            best = await scanRanking(bestType, targetTribes, memberNames, allRankingTribes, maxPages);
+            best = await scanRanking(bestType, targetTribes, maxPages);
         }
         return best;
     }
 
-    function buildCsv() {
+    function getTribeColor(target) {
+        const colors = ["#d9ead3", "#cfe2f3", "#fce5cd", "#eadcf8", "#fff2cc", "#d0e0e3", "#f4cccc", "#d9d2e9"];
+        return colors[(target?.index || 0) % colors.length];
+    }
+
+    function buildRows(targetTribes) {
         const players = new Map();
 
         for (const [player, member] of state.members) {
-            players.set(player, { player, points: member.points || 0 });
+            const target = targetTribes.length === 1 ? targetTribes[0] : null;
+            if (target) {
+                players.set(player, { player, id: member.id, tribe: target.label, target, points: member.points || 0 });
+            }
         }
-        for (const player of [...state.scavenge.keys(), ...state.farm.keys()]) {
-            if (!players.has(player)) players.set(player, { player, points: 0 });
+        for (const ranking of [...state.scavenge.values(), ...state.farm.values()]) {
+            if (!players.has(ranking.player)) {
+                players.set(ranking.player, {
+                    player: ranking.player,
+                    id: ranking.id,
+                    tribe: ranking.ally,
+                    target: ranking.target,
+                    points: state.members.get(ranking.player)?.points || 0
+                });
+            } else {
+                const current = players.get(ranking.player);
+                current.id ||= ranking.id;
+                current.tribe = ranking.ally || current.tribe;
+                current.target = ranking.target || current.target;
+            }
         }
 
-        const rows = [...players.values()].map(row => {
+        return [...players.values()].filter(row => row.target).map(row => {
             const scavenge = state.scavenge.get(row.player)?.points || 0;
             const farm = state.farm.get(row.player)?.points || 0;
             const hasCommandData = state.commandAccess.has(row.player);
@@ -215,6 +291,9 @@
             const note = !commandAccess && state.settings.falseCommandNote ? state.settings.falseCommandNote : "";
             return {
                 player: row.player,
+                id: row.id || "",
+                tribe: row.tribe || row.target.label,
+                target: row.target,
                 points: row.points,
                 scavenge,
                 farm,
@@ -223,10 +302,13 @@
                 note
             };
         }).sort((a, b) => b.points - a.points || b.total - a.total || a.player.localeCompare(b.player));
+    }
 
-        const lines = ["gracz;pkt;zbierak;farma;suma;komendy;"];
+    function buildCsv(rows) {
+        const lines = ["plemie;gracz;pkt;zbierak;farma;suma;komendy;"];
         for (const row of rows) {
             lines.push([
+                escapeCsv(row.tribe),
                 escapeCsv(row.player),
                 row.points,
                 row.scavenge,
@@ -237,6 +319,40 @@
             ].join(";"));
         }
         return lines.join("\n");
+    }
+
+    function buildHtml(rows) {
+        const missing = rows.filter(row => !row.commandAccess);
+        const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Notatka"];
+        const rowHtml = row => {
+            const color = getTribeColor(row.target);
+            return `<tr style="background:${color}"><td>${escapeHtml(row.tribe)}</td><td>${escapeHtml(row.player)}</td><td>${formatNumber(row.points)}</td><td>${formatNumber(row.scavenge)}</td><td>${formatNumber(row.farm)}</td><td>${formatNumber(row.total)}</td><td>${row.commandAccess ? "WAHR" : "FALSCH"}</td><td>${escapeHtml(row.note)}</td></tr>`;
+        };
+        const table = (title, tableRows) => `
+            <h2>${escapeHtml(title)}</h2>
+            <table>
+                <thead><tr>${header.map(column => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+                <tbody>${tableRows.map(rowHtml).join("")}</tbody>
+            </table>`;
+
+        return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body{font-family:Arial,sans-serif;color:#111}
+h2{font-size:16pt;margin:14px 0 6px}
+table{border-collapse:collapse;margin-bottom:18px}
+th,td{border:1px solid #666;padding:4px 7px;mso-number-format:"\\@"}
+th{background:#305496;color:#fff;font-weight:bold}
+td:nth-child(3),td:nth-child(4),td:nth-child(5),td:nth-child(6){text-align:right;mso-number-format:"0"}
+</style>
+</head>
+<body>
+${missing.length ? table("Players who need friend/shared commands", missing) : ""}
+${table("Council export", rows)}
+</body>
+</html>`;
     }
 
     function setProgress(text) {
@@ -275,17 +391,19 @@
                     <div class="ch-actions">
                         <button id="${NS}copy" type="button">Copy CSV</button>
                         <button id="${NS}download" type="button">Download CSV</button>
+                        <button id="${NS}download_html" type="button">Download colored XLS</button>
                     </div>
                 </div>
             </div>`;
         document.body.appendChild(overlay);
-        byId("output").value = state.output;
+        byId("output").value = state.csvOutput;
         byId("close_result").onclick = () => overlay.remove();
         byId("copy").onclick = async () => {
-            await navigator.clipboard.writeText(state.output);
+            await navigator.clipboard.writeText(state.csvOutput);
             if (window.UI?.SuccessMessage) UI.SuccessMessage("Copied");
         };
-        byId("download").onclick = () => downloadText("tribe_council_export.csv", state.output, "text/csv;charset=utf-8");
+        byId("download").onclick = () => downloadText("tribe_council_export.csv", state.csvOutput, "text/csv;charset=utf-8");
+        byId("download_html").onclick = () => downloadText("tribe_council_export_colored.xls", state.htmlOutput, "application/vnd.ms-excel;charset=utf-8");
     }
 
     async function start() {
@@ -294,23 +412,29 @@
         try {
             state.settings.tribe = byId("tribe").value;
             state.settings.maxPages = parseInt(byId("pages").value, 10) || DEFAULT_MAX_PAGES;
-            state.settings.allRankingTribes = byId("all_tribes").checked;
+            state.settings.checkFriendCommands = byId("friend_commands").checked;
             state.settings.falseCommandNote = byId("note").value.trim();
 
-            const targetTribes = state.settings.tribe.split(/\n|,|;/).map(normalize).filter(Boolean);
+            const targetTribes = parseTargetTribes(state.settings.tribe);
+            if (!targetTribes.length) {
+                throw new Error("Enter at least one tribe tag/name");
+            }
 
             setProgress("Reading tribe members");
             state.members = await getMembers();
-            const memberNames = new Set(state.members.keys());
 
             setProgress("Reading command access");
             state.commandAccess = await getCommandAccess();
 
-            state.scavenge = await scanRanking("scavenge", targetTribes, memberNames, state.settings.allRankingTribes, state.settings.maxPages);
-            state.farm = await scanFarm(targetTribes, memberNames, state.settings.allRankingTribes, state.settings.maxPages);
+            state.scavenge = await scanRanking("scavenge", targetTribes, state.settings.maxPages);
+            state.farm = await scanFarm(targetTribes, state.settings.maxPages);
 
-            state.output = buildCsv();
-            setProgress(`Done: ${state.output.split("\n").length - 1} rows`);
+            state.rows = buildRows(targetTribes);
+            await updateFriendCommandAccess(state.rows);
+            state.rows = buildRows(targetTribes);
+            state.csvOutput = buildCsv(state.rows);
+            state.htmlOutput = buildHtml(state.rows);
+            setProgress(`Done: ${state.rows.length} rows`);
             showResult();
         } catch (error) {
             console.error(error);
@@ -357,7 +481,7 @@
                 </div>
                 <div class="ch-body">
                     <label for="${NS}tribe">Tribe tag/name filter</label>
-                    <textarea id="${NS}tribe" rows="3" placeholder="One tribe per line"></textarea>
+                    <textarea id="${NS}tribe" rows="3" placeholder=":G:\n;G;"></textarea>
                     <div class="ch-row">
                         <label>Ranking pages
                             <input id="${NS}pages" type="number" min="1" max="200" value="${DEFAULT_MAX_PAGES}">
@@ -366,7 +490,7 @@
                             <input id="${NS}note" type="text" placeholder="optional">
                         </label>
                     </div>
-                    <label class="ch-check"><input id="${NS}all_tribes" type="checkbox"> Export all ranking tribes found</label>
+                    <label class="ch-check"><input id="${NS}friend_commands" type="checkbox" checked> Check friend/shared commands</label>
                     <button id="${NS}start" type="button">Start export</button>
                     <div id="${NS}progress">Ready</div>
                 </div>
