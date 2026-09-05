@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Generated exports
+tribe_council_export*.csv
+tribe_council_export*.xls
+*:Zone.Identifier
