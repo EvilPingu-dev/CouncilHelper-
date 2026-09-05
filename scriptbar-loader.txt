@@ -1,0 +1,1 @@
+javascript:(async function(){const url="https://raw.githubusercontent.com/EvilPingu-dev/CouncilHelper-/main/tribe_council_export.js";const code=await(await fetch(url)).text();const blob=new Blob([code],{type:"text/javascript"});const script=document.createElement("script");script.src=URL.createObjectURL(blob);document.body.appendChild(script);})();
