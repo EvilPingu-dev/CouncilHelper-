@@ -69,6 +69,27 @@
         return new DOMParser().parseFromString(html, "text/html");
     }
 
+    async function fetchText(url) {
+        const response = await fetch(url, { credentials: "include", cache: "no-store" });
+        if (!response.ok) {
+            throw new Error(`Failed to fetch ${url}: ${response.status}`);
+        }
+        return response.text();
+    }
+
+    function decodeMapValue(value) {
+        const text = String(value || "").replace(/\+/g, " ");
+        try {
+            return decodeURIComponent(text);
+        } catch (_) {
+            return text;
+        }
+    }
+
+    function parseMapLine(line) {
+        return line.split(",").map(decodeMapValue);
+    }
+
     function getQuery(name) {
         return new URLSearchParams(location.search).get(name);
     }
@@ -145,6 +166,45 @@
             if (parsed.size > best.size) best = parsed;
         }
         return best;
+    }
+
+    async function loadWorldMapMembers(targetTribes) {
+        const [allyText, playerText] = await Promise.all([
+            fetchText(`${location.origin}/map/ally.txt`),
+            fetchText(`${location.origin}/map/player.txt`)
+        ]);
+
+        const targetByAllyId = new Map();
+        for (const line of allyText.split("\n")) {
+            if (!line.trim()) continue;
+            const [id, name, tag] = parseMapLine(line);
+            const target = targetTribes.find(item => normalize(tag) === item.normalized || normalize(name) === item.normalized || normalize(tag).includes(item.normalized) || normalize(name).includes(item.normalized));
+            if (!id || !target) continue;
+            targetByAllyId.set(id, { id, tribe: tag || name, target });
+            state.targetAllies.set(id, { id, tribe: tag || name, target });
+        }
+
+        if (!targetByAllyId.size) {
+            throw new Error("No matching tribes found in /map/ally.txt");
+        }
+
+        const members = new Map();
+        for (const line of playerText.split("\n")) {
+            if (!line.trim()) continue;
+            const [id, name, allyId, villages, points] = parseMapLine(line);
+            const ally = targetByAllyId.get(allyId);
+            if (!ally || !name) continue;
+            members.set(name, {
+                id,
+                player: name,
+                points: parseNumber(points),
+                villages: parseNumber(villages),
+                tribe: ally.tribe,
+                target: ally.target
+            });
+        }
+
+        return members;
     }
 
     async function getCommandAccess() {
@@ -354,9 +414,22 @@
     function buildHtml(rows) {
         const missing = rows.filter(row => !row.commandAccess);
         const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Notatka"];
-        const rowHtml = row => {
+        const cell = (row, value, numeric = false) => {
             const color = getTribeColor(row.target);
-            return `<tr style="background:${color}"><td>${escapeHtml(row.tribe)}</td><td>${escapeHtml(row.player)}</td><td>${formatNumber(row.points)}</td><td>${formatNumber(row.scavenge)}</td><td>${formatNumber(row.farm)}</td><td>${formatNumber(row.total)}</td><td>${row.commandAccess ? "WAHR" : "FALSCH"}</td><td>${escapeHtml(row.note)}</td></tr>`;
+            const align = numeric ? "right" : "left";
+            return `<td bgcolor="${color}" style="background-color:${color};text-align:${align}">${escapeHtml(value)}</td>`;
+        };
+        const rowHtml = row => {
+            return `<tr>${[
+                cell(row, row.tribe),
+                cell(row, row.player),
+                cell(row, formatNumber(row.points), true),
+                cell(row, formatNumber(row.scavenge), true),
+                cell(row, formatNumber(row.farm), true),
+                cell(row, formatNumber(row.total), true),
+                cell(row, row.commandAccess ? "WAHR" : "FALSCH"),
+                cell(row, row.note)
+            ].join("")}</tr>`;
         };
         const table = (title, tableRows) => `
             <h2>${escapeHtml(title)}</h2>
@@ -366,7 +439,7 @@
             </table>`;
 
         return `<!doctype html>
-<html>
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
 <head>
 <meta charset="utf-8">
 <style>
@@ -375,7 +448,7 @@ h2{font-size:16pt;margin:14px 0 6px}
 table{border-collapse:collapse;margin-bottom:18px}
 th,td{border:1px solid #666;padding:4px 7px;mso-number-format:"\\@"}
 th{background:#305496;color:#fff;font-weight:bold}
-td:nth-child(3),td:nth-child(4),td:nth-child(5),td:nth-child(6){text-align:right;mso-number-format:"0"}
+    td:nth-child(3),td:nth-child(4),td:nth-child(5),td:nth-child(6){mso-number-format:"0"}
 </style>
 </head>
 <body>
@@ -451,8 +524,14 @@ ${table("Council export", rows)}
             }
             state.targetAllies = new Map();
 
-            setProgress("Reading tribe members");
-            state.members = await getMembers();
+            setProgress("Reading world map tribe members");
+            try {
+                state.members = await loadWorldMapMembers(targetTribes);
+            } catch (error) {
+                console.warn(error);
+                setProgress("Map data failed, reading visible tribe members");
+                state.members = await getMembers();
+            }
 
             setProgress("Reading command access");
             state.commandAccess = await getCommandAccess();

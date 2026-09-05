@@ -7,7 +7,7 @@ Browser script for Tribal Wars / Plemiona that exports tribe council data in thi
 plemie;gracz;pkt;zbierak;farma;suma;komendy;
 ```
 
-It can also download a colored `.xls` HTML table for LibreOffice. Rows are colored by tribe, and a separate table above the main export lists players who still need friend/shared command access.
+It can also download a colored `.xls` HTML table for LibreOffice. Cells are colored by tribe, and a separate table above the main export lists players who still need friend/shared command access.
 
 Files:
 
@@ -28,4 +28,4 @@ Enter tags one per line, for example:
 ;G;
 ```
 
-The script reads members from the currently open tribe page when possible, scans up to 200 daily scavenge and farm ranking pages by default, loads full member lists for matched tribe IDs, and reads command access from `screen=ally&mode=members_troops`. For players from other tribes, it also tries the same command page by player id so friend-shared command access can be detected when Tribal Wars exposes it.
+The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), scans up to 200 daily scavenge and farm ranking pages by default, and reads command access from `screen=ally&mode=members_troops`. For players from other tribes, it also tries the same command page by player id so friend-shared command access can be detected when Tribal Wars exposes it.
