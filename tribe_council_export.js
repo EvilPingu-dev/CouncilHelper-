@@ -4,7 +4,7 @@
     const NS = "ch_export_";
     const BASE_URL = `${location.origin}/game.php`;
     const REQUEST_DELAY = 250;
-    const DEFAULT_MAX_PAGES = 80;
+    const DEFAULT_MAX_PAGES = 200;
     const FARM_TYPES = ["loot_res", "loot", "loot_all"];
 
     const state = {
@@ -12,6 +12,7 @@
         commandAccess: new Map(),
         scavenge: new Map(),
         farm: new Map(),
+        targetAllies: new Map(),
         rows: [],
         csvOutput: "",
         htmlOutput: "",
@@ -109,14 +110,18 @@
             return value > best ? value : best;
         }, 0);
 
-        return { id, player, points, tribe: "" };
+        return { id, player, points, tribe: "", target: null };
     }
 
-    function parseMembers(doc) {
+    function parseMembers(doc, tribeInfo = null) {
         const members = new Map();
         for (const row of doc.querySelectorAll("table.vis tr, table tr")) {
             const member = readPlayerFromRow(row);
             if (!member) continue;
+            if (tribeInfo) {
+                member.tribe = tribeInfo.tribe;
+                member.target = tribeInfo.target;
+            }
             if (!members.has(member.player) || member.points > members.get(member.player).points) {
                 members.set(member.player, member);
             }
@@ -157,6 +162,23 @@
         return access;
     }
 
+    async function loadTargetTribeMembers() {
+        const allies = [...state.targetAllies.values()];
+        for (let index = 0; index < allies.length; index++) {
+            const ally = allies[index];
+            setProgress(`Reading tribe members ${index + 1}/${allies.length}`);
+            const doc = await fetchDoc(buildUrl({ screen: "info_ally", id: ally.id }));
+            const members = parseMembers(doc, ally);
+            for (const [player, member] of members) {
+                const current = state.members.get(player);
+                if (!current || member.points >= current.points || !current.target) {
+                    state.members.set(player, member);
+                }
+            }
+            await wait(REQUEST_DELAY);
+        }
+    }
+
     function hasReadableCommandTable(doc) {
         const table = doc.querySelector("#ally_content table.vis.w100, table.vis.w100, table.vis");
         if (!table) return false;
@@ -192,29 +214,37 @@
 
     function parseRankingRows(doc, targetTribes) {
         const rows = [];
+        let scannedRows = 0;
         const tables = [doc.querySelector("#in_a_day_ranking_table"), ...doc.querySelectorAll("table.vis")].filter(Boolean);
 
         for (const table of tables) {
             for (const row of table.querySelectorAll("tr")) {
                 const cells = row.querySelectorAll("td");
                 if (cells.length < 4) continue;
+                scannedRows++;
 
                 const playerLink = cells[1]?.querySelector('a[href*="screen=info_player"]');
                 const player = clean(playerLink?.textContent || cells[1]?.textContent);
                 const playerHref = playerLink ? new URL(playerLink.getAttribute("href"), location.origin) : null;
                 const id = playerHref?.searchParams.get("id") || playerHref?.searchParams.get("player_id") || "";
-                const ally = clean(cells[2]?.querySelector('a[href*="screen=info_ally"]')?.textContent || cells[2]?.textContent);
+                const allyLink = cells[2]?.querySelector('a[href*="screen=info_ally"]');
+                const ally = clean(allyLink?.textContent || cells[2]?.textContent);
+                const allyHref = allyLink ? new URL(allyLink.getAttribute("href"), location.origin) : null;
+                const allyId = allyHref?.searchParams.get("id") || "";
                 const points = parseNumber(cells[3]?.textContent);
                 if (!player || !points) continue;
 
                 const target = matchTargetTribe(ally, targetTribes);
                 if (!target) continue;
+                if (allyId && !state.targetAllies.has(allyId)) {
+                    state.targetAllies.set(allyId, { id: allyId, tribe: ally, target });
+                }
 
                 rows.push({ player, id, ally, target, points });
             }
         }
 
-        return rows;
+        return { rows, scannedRows };
     }
 
     async function scanRanking(type, targetTribes, maxPages) {
@@ -222,8 +252,8 @@
         for (let page = 0; page < maxPages; page++) {
             setProgress(`Scanning ${type}, page ${page + 1}/${maxPages}`);
             const doc = await fetchDoc(buildUrl({ screen: "ranking", mode: "in_a_day", type, offset: page * 25 }));
-            const rows = parseRankingRows(doc, targetTribes);
-            if (!rows.length && page > 2) break;
+            const { rows, scannedRows } = parseRankingRows(doc, targetTribes);
+            if (!scannedRows) break;
             for (const row of rows) {
                 if (!result.has(row.player) || row.points > result.get(row.player).points) {
                     result.set(row.player, row);
@@ -261,9 +291,9 @@
         const players = new Map();
 
         for (const [player, member] of state.members) {
-            const target = targetTribes.length === 1 ? targetTribes[0] : null;
+            const target = member.target || (targetTribes.length === 1 ? targetTribes[0] : null);
             if (target) {
-                players.set(player, { player, id: member.id, tribe: target.label, target, points: member.points || 0 });
+                players.set(player, { player, id: member.id, tribe: member.tribe || target.label, target, points: member.points || 0 });
             }
         }
         for (const ranking of [...state.scavenge.values(), ...state.farm.values()]) {
@@ -419,6 +449,7 @@ ${table("Council export", rows)}
             if (!targetTribes.length) {
                 throw new Error("Enter at least one tribe tag/name");
             }
+            state.targetAllies = new Map();
 
             setProgress("Reading tribe members");
             state.members = await getMembers();
@@ -428,6 +459,7 @@ ${table("Council export", rows)}
 
             state.scavenge = await scanRanking("scavenge", targetTribes, state.settings.maxPages);
             state.farm = await scanFarm(targetTribes, state.settings.maxPages);
+            await loadTargetTribeMembers();
 
             state.rows = buildRows(targetTribes);
             await updateFriendCommandAccess(state.rows);
