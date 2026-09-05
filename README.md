@@ -4,10 +4,10 @@ CouncilHelper
 Browser script for Tribal Wars / Plemiona that exports tribe council data in this shape:
 
 ```csv
-plemie;gracz;pkt;zbierak;farma;suma;komendy;
+plemie;gracz;pkt;zbierak;farma;suma;komendy;komendy_z;
 ```
 
-It can also download a colored `.xls` HTML table for LibreOffice. Cells are colored by tribe, and a separate table above the main export lists players who still need friend/shared command access.
+It can also download a colored `.xls` HTML table for LibreOffice. The XLS is grouped as one full member list per tribe you enter, with scavenge, farm, sum, and command access joined onto each player. Cells are colored by tribe, and a separate table above the tribe lists shows players who still need friend/shared command access.
 
 Files:
 

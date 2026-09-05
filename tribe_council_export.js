@@ -10,6 +10,7 @@
     const state = {
         members: new Map(),
         commandAccess: new Map(),
+        commandSource: new Map(),
         scavenge: new Map(),
         farm: new Map(),
         targetAllies: new Map(),
@@ -218,6 +219,9 @@
                 .trim();
             if (!player || option.value === "") continue;
             access.set(player, !option.disabled);
+            if (!option.disabled) {
+                state.commandSource.set(player, "tribe");
+            }
         }
         return access;
     }
@@ -259,6 +263,7 @@
                 const doc = await fetchDoc(buildUrl({ screen: "ally", mode: "members_troops", player_id: row.id }));
                 if (hasReadableCommandTable(doc)) {
                     state.commandAccess.set(row.player, true);
+                    state.commandSource.set(row.player, "friend");
                 } else if (!state.commandAccess.has(row.player)) {
                     state.commandAccess.set(row.player, false);
                 }
@@ -378,6 +383,7 @@
             const farm = state.farm.get(row.player)?.points || 0;
             const hasCommandData = state.commandAccess.has(row.player);
             const commandAccess = hasCommandData ? state.commandAccess.get(row.player) : false;
+            const commandSource = commandAccess ? (state.commandSource.get(row.player) || "tribe") : "";
             const note = !commandAccess && state.settings.falseCommandNote ? state.settings.falseCommandNote : "";
             return {
                 player: row.player,
@@ -389,13 +395,14 @@
                 farm,
                 total: scavenge + farm,
                 commandAccess,
+                commandSource,
                 note
             };
-        }).sort((a, b) => b.points - a.points || b.total - a.total || a.player.localeCompare(b.player));
+        }).sort((a, b) => a.target.index - b.target.index || b.points - a.points || b.total - a.total || a.player.localeCompare(b.player));
     }
 
     function buildCsv(rows) {
-        const lines = ["plemie;gracz;pkt;zbierak;farma;suma;komendy;"];
+        const lines = ["plemie;gracz;pkt;zbierak;farma;suma;komendy;komendy_z;"];
         for (const row of rows) {
             lines.push([
                 escapeCsv(row.tribe),
@@ -405,6 +412,7 @@
                 row.farm,
                 row.total,
                 row.commandAccess ? "WAHR" : "FALSCH",
+                row.commandSource,
                 escapeCsv(row.note)
             ].join(";"));
         }
@@ -413,7 +421,7 @@
 
     function buildHtml(rows) {
         const missing = rows.filter(row => !row.commandAccess);
-        const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Notatka"];
+        const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Komendy z", "Notatka"];
         const cell = (row, value, numeric = false) => {
             const color = getTribeColor(row.target);
             const align = numeric ? "right" : "left";
@@ -428,6 +436,7 @@
                 cell(row, formatNumber(row.farm), true),
                 cell(row, formatNumber(row.total), true),
                 cell(row, row.commandAccess ? "WAHR" : "FALSCH"),
+                cell(row, row.commandSource),
                 cell(row, row.note)
             ].join("")}</tr>`;
         };
@@ -437,6 +446,12 @@
                 <thead><tr>${header.map(column => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
                 <tbody>${tableRows.map(rowHtml).join("")}</tbody>
             </table>`;
+        const tribeTables = [...new Map(rows.map(row => [row.target.label, row.target])).values()]
+            .map(target => {
+                const tribeRows = rows.filter(row => row.target.index === target.index);
+                return table(`${target.label} members`, tribeRows);
+            })
+            .join("");
 
         return `<!doctype html>
     <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
@@ -453,7 +468,7 @@ th{background:#305496;color:#fff;font-weight:bold}
 </head>
 <body>
 ${missing.length ? table("Players who need friend/shared commands", missing) : ""}
-${table("Council export", rows)}
+${tribeTables}
 </body>
 </html>`;
     }
@@ -523,6 +538,7 @@ ${table("Council export", rows)}
                 throw new Error("Enter at least one tribe tag/name");
             }
             state.targetAllies = new Map();
+            state.commandSource = new Map();
 
             setProgress("Reading world map tribe members");
             try {
