@@ -29,7 +29,12 @@ Usage:
 1. Push this repo to `https://github.com/EvilPingu-dev/CouncilHelper-`.
 2. Put the one-line code from `scriptbar-loader.txt` into the Tribal Wars script bar.
 3. Open a tribe page, run the loader, enter only the tribe tags you want, and click `Start export`.
-4. Use `Download colored XLS` for LibreOffice colors, `Copy CSV` / `Download CSV` for plain data, or `Copy BBCode` for a forum post (one `[table]` per tribe).
+4. Use `Download colored XLS` for LibreOffice colors, `Copy CSV` / `Download CSV` for plain data, or one of the BBCode exports for a forum post:
+   - `BBCode: full` — all columns, one `[table]` per tribe
+   - `BBCode: brak komend` — only players *without* command sharing (player + status)
+   - `BBCode: ranking dzienny` — daily ranking columns only, no command data
+
+The result window shows every tribe in one sortable table (click any column header to sort), with each tribe in its own color.
 
 Enter tags one per line, for example:
 
