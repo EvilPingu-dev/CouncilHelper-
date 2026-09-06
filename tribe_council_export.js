@@ -17,6 +17,9 @@
         csvOutput: "",
         htmlOutput: "",
         bbcodeOutput: "",
+        bbcodeMissingOutput: "",
+        bbcodeRankingOutput: "",
+        sort: { key: "points", dir: "desc" },
         settings: {
             tribe: "",
             checkFriendCommands: true,
@@ -467,6 +470,40 @@
         }).join("\n\n");
     }
 
+    function buildMissingCommandsBbcode(rows, targetTribes) {
+        const header = ["Gracz", "Status komend"];
+        return targetTribes.map(target => {
+            const tribeRows = rows.filter(row => row.target.index === target.index && !row.commandAccess);
+            if (!tribeRows.length) return "";
+            const lines = [`[b]${target.label} \u2013 brak komend (${tribeRows.length})[/b]`, "[table]", `[**]${header.join("[||]")}[/**]`];
+            for (const row of tribeRows) {
+                lines.push(`[*]${row.player}[|]${STATUS_LABELS[row.commandStatus] || row.commandStatus}`);
+            }
+            lines.push("[/table]");
+            return lines.join("\n");
+        }).filter(Boolean).join("\n\n");
+    }
+
+    function buildRankingBbcode(rows, targetTribes) {
+        const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma"];
+        return targetTribes.map(target => {
+            const tribeRows = rows.filter(row => row.target.index === target.index);
+            const lines = [`[b]${target.label} \u2013 ranking dzienny (${tribeRows.length})[/b]`, "[table]", `[**]${header.join("[||]")}[/**]`];
+            for (const row of tribeRows) {
+                lines.push(`[*]${[
+                    row.tribe,
+                    row.player,
+                    formatNumber(row.points),
+                    formatNumber(row.scavenge),
+                    formatNumber(row.farm),
+                    formatNumber(row.total)
+                ].join("[|]")}`);
+            }
+            lines.push("[/table]");
+            return lines.join("\n");
+        }).join("\n\n");
+    }
+
     function buildHtml(rows, targetTribes) {
         const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Status komend", "Notatka"];
         const cell = (row, value, numeric = false) => {
@@ -539,6 +576,75 @@ ${tribeTables}
         setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
     }
 
+    const RESULT_COLUMNS = [
+        { key: "tribe", label: "Plemię" },
+        { key: "player", label: "Gracz" },
+        { key: "points", label: "Pkt", numeric: true },
+        { key: "scavenge", label: "Zbierak", numeric: true },
+        { key: "farm", label: "Farma", numeric: true },
+        { key: "total", label: "Suma", numeric: true },
+        { key: "commandAccess", label: "Komendy" },
+        { key: "commandStatus", label: "Status komend" }
+    ];
+
+    function sortResultRows(rows) {
+        const { key, dir } = state.sort;
+        const factor = dir === "asc" ? 1 : -1;
+        return [...rows].sort((a, b) => {
+            let left = a[key];
+            let right = b[key];
+            if (key === "commandAccess") {
+                left = left ? 1 : 0;
+                right = right ? 1 : 0;
+            }
+            if (key === "commandStatus") {
+                left = STATUS_LABELS[left] || left;
+                right = STATUS_LABELS[right] || right;
+            }
+            if (typeof left === "number" && typeof right === "number") {
+                return (left - right) * factor;
+            }
+            return String(left).localeCompare(String(right)) * factor;
+        });
+    }
+
+    function renderResultTable() {
+        const container = byId("table_wrap");
+        if (!container) return;
+        const rows = sortResultRows(state.rows);
+        const head = RESULT_COLUMNS.map(column => {
+            const arrow = state.sort.key === column.key ? (state.sort.dir === "asc" ? " \u25b2" : " \u25bc") : "";
+            return `<th data-sort-key="${column.key}">${escapeHtml(column.label)}${arrow}</th>`;
+        }).join("");
+        const body = rows.map(row => {
+            const color = getTribeColor(row.target);
+            const cells = RESULT_COLUMNS.map(column => {
+                let value;
+                if (column.key === "commandAccess") {
+                    value = row.commandAccess ? "\u2611" : "\u2610";
+                } else if (column.key === "commandStatus") {
+                    value = STATUS_LABELS[row.commandStatus] || row.commandStatus;
+                } else if (column.numeric) {
+                    value = formatNumber(row[column.key]);
+                } else {
+                    value = row[column.key];
+                }
+                const align = column.numeric ? "right" : "left";
+                return `<td style="text-align:${align}">${escapeHtml(value)}</td>`;
+            }).join("");
+            return `<tr style="background:${color}">${cells}</tr>`;
+        }).join("");
+
+        container.innerHTML = `<table class="ch-result-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+        for (const th of container.querySelectorAll("th[data-sort-key]")) {
+            th.onclick = () => {
+                const key = th.dataset.sortKey;
+                state.sort = { key, dir: state.sort.key === key && state.sort.dir === "asc" ? "desc" : "asc" };
+                renderResultTable();
+            };
+        }
+    }
+
     function showResult() {
         document.getElementById(NS + "result")?.remove();
         const overlay = document.createElement("div");
@@ -547,30 +653,32 @@ ${tribeTables}
         overlay.innerHTML = `
             <div class="ch-result-card">
                 <div class="ch-header">
-                    <h2>Council export</h2>
+                    <h2>Council export (${state.rows.length})</h2>
                     <button id="${NS}close_result" type="button">x</button>
                 </div>
                 <div class="ch-body">
-                    <textarea id="${NS}output" readonly></textarea>
+                    <div id="${NS}table_wrap" class="ch-table-wrap"></div>
                     <div class="ch-actions">
                         <button id="${NS}copy" type="button">Copy CSV</button>
                         <button id="${NS}download" type="button">Download CSV</button>
-                        <button id="${NS}copy_bbcode" type="button">Copy BBCode</button>
+                        <button id="${NS}copy_bbcode" type="button">BBCode: full</button>
+                        <button id="${NS}copy_bbcode_missing" type="button">BBCode: brak komend</button>
+                        <button id="${NS}copy_bbcode_ranking" type="button">BBCode: ranking dzienny</button>
                         <button id="${NS}download_html" type="button">Download colored XLS</button>
                     </div>
                 </div>
             </div>`;
         document.body.appendChild(overlay);
-        byId("output").value = state.csvOutput;
+        renderResultTable();
+        const copyToClipboard = async text => {
+            await navigator.clipboard.writeText(text);
+            if (window.UI?.SuccessMessage) UI.SuccessMessage("Copied");
+        };
         byId("close_result").onclick = () => overlay.remove();
-        byId("copy").onclick = async () => {
-            await navigator.clipboard.writeText(state.csvOutput);
-            if (window.UI?.SuccessMessage) UI.SuccessMessage("Copied");
-        };
-        byId("copy_bbcode").onclick = async () => {
-            await navigator.clipboard.writeText(state.bbcodeOutput);
-            if (window.UI?.SuccessMessage) UI.SuccessMessage("Copied");
-        };
+        byId("copy").onclick = () => copyToClipboard(state.csvOutput);
+        byId("copy_bbcode").onclick = () => copyToClipboard(state.bbcodeOutput);
+        byId("copy_bbcode_missing").onclick = () => copyToClipboard(state.bbcodeMissingOutput);
+        byId("copy_bbcode_ranking").onclick = () => copyToClipboard(state.bbcodeRankingOutput);
         byId("download").onclick = () => downloadText("tribe_council_export.csv", state.csvOutput, "text/csv;charset=utf-8");
         byId("download_html").onclick = () => downloadText("tribe_council_export_colored.xls", state.htmlOutput, "application/vnd.ms-excel;charset=utf-8");
     }
@@ -611,6 +719,8 @@ ${tribeTables}
             state.csvOutput = buildCsv(state.rows);
             state.htmlOutput = buildHtml(state.rows, targetTribes);
             state.bbcodeOutput = buildBbcode(state.rows, targetTribes);
+            state.bbcodeMissingOutput = buildMissingCommandsBbcode(state.rows, targetTribes);
+            state.bbcodeRankingOutput = buildRankingBbcode(state.rows, targetTribes);
             setProgress(`Done: ${state.rows.length} rows`);
             showResult();
         } catch (error) {
@@ -629,7 +739,7 @@ ${tribeTables}
         style.textContent = `
             .ch-overlay{position:fixed;inset:0;z-index:2147483647;background:rgba(5,10,18,.72);display:flex;align-items:center;justify-content:center;padding:16px;font-family:Verdana,Arial,sans-serif;color:#172033}
             .ch-card,.ch-result-card{width:min(560px,96vw);background:#fff;border:2px solid #2f6f73;border-radius:8px;box-shadow:0 20px 45px rgba(0,0,0,.35);overflow:hidden}
-            .ch-result-card{width:min(980px,96vw)}
+            .ch-result-card{width:min(1200px,96vw)}
             .ch-header{display:flex;align-items:center;justify-content:space-between;background:#2f6f73;color:#fff;padding:10px 12px}
             .ch-header h2{margin:0;font-size:20px;letter-spacing:0}
             .ch-header button{width:30px;height:30px;border:1px solid rgba(255,255,255,.65);border-radius:6px;background:rgba(255,255,255,.14);color:#fff;cursor:pointer}
@@ -643,7 +753,11 @@ ${tribeTables}
             .ch-actions button,#${NS}start{border:1px solid #265f62;border-radius:6px;background:#2f6f73;color:#fff;font-weight:700;padding:9px 12px;cursor:pointer}
             .ch-actions button:hover,#${NS}start:hover{filter:brightness(1.08)}
             #${NS}progress{min-height:18px;font-size:12px;color:#263238;white-space:pre-wrap}
-            #${NS}output{min-height:420px;font-family:Consolas,Monaco,monospace;font-size:12px;resize:vertical}
+            .ch-table-wrap{max-height:65vh;overflow:auto;border:1px solid #a8c4bd;border-radius:6px;background:#fff}
+            .ch-result-table{width:100%;border-collapse:collapse;font-size:12px}
+            .ch-result-table th{position:sticky;top:0;background:#2f6f73;color:#fff;padding:7px 8px;cursor:pointer;white-space:nowrap;user-select:none}
+            .ch-result-table th:hover{filter:brightness(1.12)}
+            .ch-result-table td{padding:5px 8px;border-bottom:1px solid #dfe8e4;white-space:nowrap}
         `;
         document.head.appendChild(style);
 
