@@ -17,7 +17,7 @@ Command status (`status_komend`) is one of 5 real states:
 - `Poza plemieniem: znajomy, brak` — different tribe, friend, no shared commands
 - `Poza plemieniem: znajomy, udostępnia` — different tribe, friend, shares commands
 
-Same-tribe status comes from the tribe's own `members_troops` access list, which is reliable. Friend status is detected from the add/remove-friend link on `screen=info_player`, and shared-commands-for-friends is detected by checking whether that same profile page exposes a troop/command table. This friend-sharing detection is best-effort: if your world's page structure differs, that part may need small adjustments.
+Same-tribe and friend status both come from the game's own `Ustawienia > Dzielenie się komendami` (Settings > Command sharing) page (`screen=settings&mode=command_sharing`), which lists exactly who currently shares commands with the viewer. This is the real signal Tribal Wars uses, not a guess.
 
 Files:
 
@@ -38,4 +38,4 @@ Enter tags one per line, for example:
 ;G;
 ```
 
-The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), scans all daily scavenge and farm ranking pages until they run out, and reads command access from `screen=ally&mode=members_troops`. For players from other tribes, it also tries the same command page by player id so friend-shared command access can be detected when Tribal Wars exposes it.
+The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), scans all daily scavenge and farm ranking pages until they run out, and reads command sharing status from `screen=settings&mode=command_sharing` (`type=ally` for tribe members, `type=buddy` for friends).

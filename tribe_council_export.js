@@ -9,9 +9,8 @@
 
     const state = {
         members: new Map(),
-        tribeCommandAccess: new Map(),
-        friendStatus: new Map(),
-        friendCommandAccess: new Map(),
+        tribeShares: new Map(),
+        buddyShares: new Map(),
         scavenge: new Map(),
         farm: new Map(),
         targetAllies: new Map(),
@@ -223,24 +222,35 @@
         return members;
     }
 
-    async function loadTribeCommandAccess() {
-        if (!window.game_data?.player?.ally) return;
-
-        const doc = await fetchDoc(buildUrl({ screen: "ally", mode: "members_troops" }));
-        for (const option of doc.querySelectorAll("select option")) {
-            const player = clean(option.label || option.textContent)
-                .replace(/\([^)]*dost[^)]*\)$/i, "")
-                .trim();
-            if (!player || option.value === "") continue;
-            state.tribeCommandAccess.set(player, !option.disabled);
-        }
+    // real signal: settings > command_sharing lists everyone sharing commands with the viewer
+    function rowSharesCommands(row) {
+        return Boolean(row.querySelector('img[src*="confirm"]'));
     }
 
-    // best-effort: TW exposes friend status via an add/remove-friend link on the profile page
-    function detectFriendStatus(doc) {
-        if (doc.querySelector('a[href*="action=friend_remove"], a.friend-remove, .icon-x-fav')) return true;
-        if (doc.querySelector('a[href*="action=friend_add"], a.friend-add')) return false;
-        return null;
+    async function fetchCommandSharingRows(type) {
+        const doc = await fetchDoc(buildUrl({ screen: "settings", mode: "command_sharing", action: "command_sharing", type }));
+        const rows = new Map();
+        for (const row of doc.querySelectorAll("table.vis tr")) {
+            const link = row.querySelector('a[href*="screen=info_player"]');
+            const player = clean(link?.textContent);
+            if (!player) continue;
+            rows.set(player, rowSharesCommands(row));
+        }
+        return rows;
+    }
+
+    async function loadCommandSharing() {
+        try {
+            state.tribeShares = await fetchCommandSharingRows("ally");
+        } catch (error) {
+            console.warn("Tribe command_sharing page failed", error);
+        }
+        if (!state.settings.checkFriendCommands) return;
+        try {
+            state.buddyShares = await fetchCommandSharingRows("buddy");
+        } catch (error) {
+            console.warn("Friend command_sharing page failed", error);
+        }
     }
 
     async function loadTargetTribeMembers() {
@@ -260,50 +270,16 @@
         }
     }
 
-    function hasReadableCommandTable(doc) {
-        const table = doc.querySelector("#ally_content table.vis.w100, table.vis.w100, table.vis");
-        if (!table) return false;
-        return [...table.querySelectorAll("tr")].some(row => /\d+\|\d+/.test(row.textContent));
-    }
-
-    async function checkOutsiderCommandStatus(rows) {
-        if (!state.settings.checkFriendCommands) return;
-
-        const outsiders = rows
-            .filter(row => row.id && !isSameTribe(row.target))
-            .filter((row, index, all) => all.findIndex(item => item.player === row.player) === index);
-
-        for (let index = 0; index < outsiders.length; index++) {
-            const row = outsiders[index];
-            setProgress(`Checking friend status ${index + 1}/${outsiders.length}`);
-            try {
-                const doc = await fetchDoc(buildUrl({ screen: "info_player", id: row.id }));
-                const isFriend = detectFriendStatus(doc);
-                state.friendStatus.set(row.player, Boolean(isFriend));
-                if (isFriend) {
-                    state.friendCommandAccess.set(row.player, hasReadableCommandTable(doc));
-                }
-            } catch (error) {
-                console.warn("Friend check failed", row.player, error);
-            }
-            await wait(REQUEST_DELAY);
-        }
-    }
-
     // 5 states requested: same-tribe shared/hidden, outsider not-friend/friend-hidden/friend-shared
     function classifyCommandStatus(row) {
         if (isSameTribe(row.target)) {
-            const shared = state.tribeCommandAccess.get(row.player) === true;
+            const shared = state.tribeShares.get(row.player) === true;
             return { status: shared ? "same_tribe_shared" : "same_tribe_hidden", access: shared, source: "tribe" };
         }
-        if (!state.settings.checkFriendCommands) {
+        if (!state.buddyShares.has(row.player)) {
             return { status: "not_friend", access: false, source: "" };
         }
-        const isFriend = state.friendStatus.get(row.player) === true;
-        if (!isFriend) {
-            return { status: "not_friend", access: false, source: "" };
-        }
-        const shared = state.friendCommandAccess.get(row.player) === true;
+        const shared = state.buddyShares.get(row.player) === true;
         return { status: shared ? "friend_shared" : "friend_hidden", access: shared, source: shared ? "friend" : "" };
     }
 
@@ -567,9 +543,8 @@ ${tribeTables}
                 throw new Error("Enter at least one tribe tag/name");
             }
             state.targetAllies = new Map();
-            state.tribeCommandAccess = new Map();
-            state.friendStatus = new Map();
-            state.friendCommandAccess = new Map();
+            state.tribeShares = new Map();
+            state.buddyShares = new Map();
 
             setProgress("Reading world map tribe members");
             try {
@@ -580,15 +555,13 @@ ${tribeTables}
                 state.members = await getMembers();
             }
 
-            setProgress("Reading tribe command access");
-            await loadTribeCommandAccess();
+            setProgress("Reading command sharing settings");
+            await loadCommandSharing();
 
             state.scavenge = await scanRanking("scavenge", targetTribes, DEFAULT_MAX_PAGES);
             state.farm = await scanFarm(targetTribes, DEFAULT_MAX_PAGES);
             await loadTargetTribeMembers();
 
-            state.rows = buildRows(targetTribes);
-            await checkOutsiderCommandStatus(state.rows);
             state.rows = buildRows(targetTribes);
             state.csvOutput = buildCsv(state.rows);
             state.htmlOutput = buildHtml(state.rows, targetTribes);
