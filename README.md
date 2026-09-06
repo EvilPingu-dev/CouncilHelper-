@@ -38,4 +38,4 @@ Enter tags one per line, for example:
 ;G;
 ```
 
-The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), scans all daily scavenge and farm ranking pages until they run out, and reads command sharing status from `screen=settings&mode=command_sharing` (`type=ally` for tribe members, `type=buddy` for friends).
+The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), detects the real number of scavenge/farm ranking pages per world (via an offset that TW clamps to the last page) instead of guessing a fixed limit, and reads command sharing status from `screen=settings&mode=command_sharing` (`type=ally` for tribe members, `type=buddy` for friends). In the colored XLS, `Komendy` is an actual checkbox instead of text.
