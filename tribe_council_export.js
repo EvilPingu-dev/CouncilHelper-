@@ -16,6 +16,7 @@
         rows: [],
         csvOutput: "",
         htmlOutput: "",
+        bbcodeOutput: "",
         settings: {
             tribe: "",
             checkFriendCommands: true,
@@ -433,12 +434,37 @@
                 row.scavenge,
                 row.farm,
                 row.total,
-                row.commandAccess ? "WAHR" : "FALSCH",
+                row.commandAccess ? "\u2611" : "\u2610",
                 escapeCsv(STATUS_LABELS[row.commandStatus] || row.commandStatus),
                 escapeCsv(row.note)
             ].join(";"));
         }
         return lines.join("\n");
+    }
+
+    function buildBbcode(rows, targetTribes) {
+        const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Status komend", "Notatka"];
+        const bbRow = row => [
+            row.tribe,
+            row.player,
+            formatNumber(row.points),
+            formatNumber(row.scavenge),
+            formatNumber(row.farm),
+            formatNumber(row.total),
+            row.commandAccess ? "\u2611" : "\u2610",
+            STATUS_LABELS[row.commandStatus] || row.commandStatus,
+            row.note
+        ].join("[|]");
+
+        return targetTribes.map(target => {
+            const tribeRows = rows.filter(row => row.target.index === target.index);
+            const lines = [`[b]${target.label} members (${tribeRows.length})[/b]`, "[table]", `[**]${header.join("[||]")}[/**]`];
+            for (const row of tribeRows) {
+                lines.push(`[*]${bbRow(row)}`);
+            }
+            lines.push("[/table]");
+            return lines.join("\n");
+        }).join("\n\n");
     }
 
     function buildHtml(rows, targetTribes) {
@@ -448,11 +474,6 @@
             const align = numeric ? "right" : "left";
             return `<td bgcolor="${color}" style="background-color:${color};text-align:${align}">${escapeHtml(value)}</td>`;
         };
-        const checkboxCell = row => {
-            const color = getTribeColor(row.target);
-            const checked = row.commandAccess ? " checked" : "";
-            return `<td bgcolor="${color}" style="background-color:${color};text-align:center"><input type="checkbox"${checked} disabled></td>`;
-        };
         const rowHtml = row => {
             return `<tr>${[
                 cell(row, row.tribe),
@@ -461,7 +482,7 @@
                 cell(row, formatNumber(row.scavenge), true),
                 cell(row, formatNumber(row.farm), true),
                 cell(row, formatNumber(row.total), true),
-                checkboxCell(row),
+                cell(row, row.commandAccess ? "\u2611" : "\u2610"),
                 cell(row, STATUS_LABELS[row.commandStatus] || row.commandStatus),
                 cell(row, row.note)
             ].join("")}</tr>`;
@@ -534,6 +555,7 @@ ${tribeTables}
                     <div class="ch-actions">
                         <button id="${NS}copy" type="button">Copy CSV</button>
                         <button id="${NS}download" type="button">Download CSV</button>
+                        <button id="${NS}copy_bbcode" type="button">Copy BBCode</button>
                         <button id="${NS}download_html" type="button">Download colored XLS</button>
                     </div>
                 </div>
@@ -543,6 +565,10 @@ ${tribeTables}
         byId("close_result").onclick = () => overlay.remove();
         byId("copy").onclick = async () => {
             await navigator.clipboard.writeText(state.csvOutput);
+            if (window.UI?.SuccessMessage) UI.SuccessMessage("Copied");
+        };
+        byId("copy_bbcode").onclick = async () => {
+            await navigator.clipboard.writeText(state.bbcodeOutput);
             if (window.UI?.SuccessMessage) UI.SuccessMessage("Copied");
         };
         byId("download").onclick = () => downloadText("tribe_council_export.csv", state.csvOutput, "text/csv;charset=utf-8");
@@ -584,6 +610,7 @@ ${tribeTables}
             state.rows = buildRows(targetTribes);
             state.csvOutput = buildCsv(state.rows);
             state.htmlOutput = buildHtml(state.rows, targetTribes);
+            state.bbcodeOutput = buildBbcode(state.rows, targetTribes);
             setProgress(`Done: ${state.rows.length} rows`);
             showResult();
         } catch (error) {

@@ -29,7 +29,7 @@ Usage:
 1. Push this repo to `https://github.com/EvilPingu-dev/CouncilHelper-`.
 2. Put the one-line code from `scriptbar-loader.txt` into the Tribal Wars script bar.
 3. Open a tribe page, run the loader, enter only the tribe tags you want, and click `Start export`.
-4. Use `Download colored XLS` for LibreOffice colors, or `Copy CSV` / `Download CSV` for plain data.
+4. Use `Download colored XLS` for LibreOffice colors, `Copy CSV` / `Download CSV` for plain data, or `Copy BBCode` for a forum post (one `[table]` per tribe).
 
 Enter tags one per line, for example:
 
@@ -38,4 +38,4 @@ Enter tags one per line, for example:
 ;G;
 ```
 
-The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), detects the real number of scavenge/farm ranking pages per world (via an offset that TW clamps to the last page) instead of guessing a fixed limit, and reads command sharing status from `screen=settings&mode=command_sharing` (`type=ally` for tribe members, `type=buddy` for friends). In the colored XLS, `Komendy` is an actual checkbox instead of text.
+The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), detects the real number of scavenge/farm ranking pages per world (via an offset that TW clamps to the last page) instead of guessing a fixed limit, and reads command sharing status from `screen=settings&mode=command_sharing` (`type=ally` for tribe members, `type=buddy` for friends). `Komendy` is shown as a ☑/☐ checkbox glyph in CSV, XLS, and BBCode (a real `<input type="checkbox">` gets silently dropped when LibreOffice Calc imports the HTML, so a glyph is used instead).
