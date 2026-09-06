@@ -9,8 +9,9 @@
 
     const state = {
         members: new Map(),
-        commandAccess: new Map(),
-        commandSource: new Map(),
+        tribeCommandAccess: new Map(),
+        friendStatus: new Map(),
+        friendCommandAccess: new Map(),
         scavenge: new Map(),
         farm: new Map(),
         targetAllies: new Map(),
@@ -23,6 +24,15 @@
             checkFriendCommands: true,
             falseCommandNote: ""
         }
+    };
+
+    // combined tribe/friend command-sharing states requested by council
+    const STATUS_LABELS = {
+        same_tribe_shared: "Plemię: udostępnia",
+        same_tribe_hidden: "Plemię: brak",
+        not_friend: "Poza plemieniem: nie znajomy",
+        friend_hidden: "Poza plemieniem: znajomy, brak",
+        friend_shared: "Poza plemieniem: znajomy, udostępnia"
     };
 
     const byId = id => document.getElementById(NS + id);
@@ -109,12 +119,17 @@
         return input.split(/\n|,/)
             .map(value => clean(value))
             .filter(Boolean)
-            .map((label, index) => ({ label, normalized: normalize(label), index }));
+            .map((label, index) => ({ label, normalized: normalize(label), index, allyId: null }));
     }
 
     function matchTargetTribe(tribe, targetTribes) {
         const normalized = normalize(tribe);
         return targetTribes.find(target => normalized.includes(target.normalized));
+    }
+
+    function isSameTribe(target) {
+        const viewerAlly = window.game_data?.player?.ally;
+        return Boolean(target?.allyId && viewerAlly && String(target.allyId) === String(viewerAlly));
     }
 
     function readPlayerFromRow(row) {
@@ -181,6 +196,7 @@
             const [id, name, tag] = parseMapLine(line);
             const target = targetTribes.find(item => normalize(tag) === item.normalized || normalize(name) === item.normalized || normalize(tag).includes(item.normalized) || normalize(name).includes(item.normalized));
             if (!id || !target) continue;
+            target.allyId ||= id;
             targetByAllyId.set(id, { id, tribe: tag || name, target });
             state.targetAllies.set(id, { id, tribe: tag || name, target });
         }
@@ -208,9 +224,8 @@
         return members;
     }
 
-    async function getCommandAccess() {
-        const access = new Map();
-        if (!window.game_data?.player?.ally) return access;
+    async function loadTribeCommandAccess() {
+        if (!window.game_data?.player?.ally) return;
 
         const doc = await fetchDoc(buildUrl({ screen: "ally", mode: "members_troops" }));
         for (const option of doc.querySelectorAll("select option")) {
@@ -218,12 +233,15 @@
                 .replace(/\([^)]*dost[^)]*\)$/i, "")
                 .trim();
             if (!player || option.value === "") continue;
-            access.set(player, !option.disabled);
-            if (!option.disabled) {
-                state.commandSource.set(player, "tribe");
-            }
+            state.tribeCommandAccess.set(player, !option.disabled);
         }
-        return access;
+    }
+
+    // best-effort: TW exposes friend status via an add/remove-friend link on the profile page
+    function detectFriendStatus(doc) {
+        if (doc.querySelector('a[href*="action=friend_remove"], a.friend-remove, .icon-x-fav')) return true;
+        if (doc.querySelector('a[href*="action=friend_add"], a.friend-add')) return false;
+        return null;
     }
 
     async function loadTargetTribeMembers() {
@@ -249,32 +267,45 @@
         return [...table.querySelectorAll("tr")].some(row => /\d+\|\d+/.test(row.textContent));
     }
 
-    async function updateFriendCommandAccess(rows) {
+    async function checkOutsiderCommandStatus(rows) {
         if (!state.settings.checkFriendCommands) return;
 
-        const candidates = rows
-            .filter(row => row.id && !state.commandAccess.get(row.player))
+        const outsiders = rows
+            .filter(row => row.id && !isSameTribe(row.target))
             .filter((row, index, all) => all.findIndex(item => item.player === row.player) === index);
 
-        for (let index = 0; index < candidates.length; index++) {
-            const row = candidates[index];
-            setProgress(`Checking shared commands ${index + 1}/${candidates.length}`);
+        for (let index = 0; index < outsiders.length; index++) {
+            const row = outsiders[index];
+            setProgress(`Checking friend status ${index + 1}/${outsiders.length}`);
             try {
-                const doc = await fetchDoc(buildUrl({ screen: "ally", mode: "members_troops", player_id: row.id }));
-                if (hasReadableCommandTable(doc)) {
-                    state.commandAccess.set(row.player, true);
-                    state.commandSource.set(row.player, "friend");
-                } else if (!state.commandAccess.has(row.player)) {
-                    state.commandAccess.set(row.player, false);
+                const doc = await fetchDoc(buildUrl({ screen: "info_player", id: row.id }));
+                const isFriend = detectFriendStatus(doc);
+                state.friendStatus.set(row.player, Boolean(isFriend));
+                if (isFriend) {
+                    state.friendCommandAccess.set(row.player, hasReadableCommandTable(doc));
                 }
             } catch (error) {
-                console.warn("Command check failed", row.player, error);
-                if (!state.commandAccess.has(row.player)) {
-                    state.commandAccess.set(row.player, false);
-                }
+                console.warn("Friend check failed", row.player, error);
             }
             await wait(REQUEST_DELAY);
         }
+    }
+
+    // 5 states requested: same-tribe shared/hidden, outsider not-friend/friend-hidden/friend-shared
+    function classifyCommandStatus(row) {
+        if (isSameTribe(row.target)) {
+            const shared = state.tribeCommandAccess.get(row.player) === true;
+            return { status: shared ? "same_tribe_shared" : "same_tribe_hidden", access: shared, source: "tribe" };
+        }
+        if (!state.settings.checkFriendCommands) {
+            return { status: "not_friend", access: false, source: "" };
+        }
+        const isFriend = state.friendStatus.get(row.player) === true;
+        if (!isFriend) {
+            return { status: "not_friend", access: false, source: "" };
+        }
+        const shared = state.friendCommandAccess.get(row.player) === true;
+        return { status: shared ? "friend_shared" : "friend_hidden", access: shared, source: shared ? "friend" : "" };
     }
 
     function parseRankingRows(doc, targetTribes) {
@@ -301,8 +332,11 @@
 
                 const target = matchTargetTribe(ally, targetTribes);
                 if (!target) continue;
-                if (allyId && !state.targetAllies.has(allyId)) {
-                    state.targetAllies.set(allyId, { id: allyId, tribe: ally, target });
+                if (allyId) {
+                    target.allyId ||= allyId;
+                    if (!state.targetAllies.has(allyId)) {
+                        state.targetAllies.set(allyId, { id: allyId, tribe: ally, target });
+                    }
                 }
 
                 rows.push({ player, id, ally, target, points });
@@ -381,10 +415,8 @@
         return [...players.values()].filter(row => row.target).map(row => {
             const scavenge = state.scavenge.get(row.player)?.points || 0;
             const farm = state.farm.get(row.player)?.points || 0;
-            const hasCommandData = state.commandAccess.has(row.player);
-            const commandAccess = hasCommandData ? state.commandAccess.get(row.player) : false;
-            const commandSource = commandAccess ? (state.commandSource.get(row.player) || "tribe") : "";
-            const note = !commandAccess && state.settings.falseCommandNote ? state.settings.falseCommandNote : "";
+            const { status, access, source } = classifyCommandStatus(row);
+            const note = !access && state.settings.falseCommandNote ? state.settings.falseCommandNote : "";
             return {
                 player: row.player,
                 id: row.id || "",
@@ -394,15 +426,16 @@
                 scavenge,
                 farm,
                 total: scavenge + farm,
-                commandAccess,
-                commandSource,
+                commandAccess: access,
+                commandStatus: status,
+                commandSource: source,
                 note
             };
         }).sort((a, b) => a.target.index - b.target.index || b.points - a.points || b.total - a.total || a.player.localeCompare(b.player));
     }
 
     function buildCsv(rows) {
-        const lines = ["plemie;gracz;pkt;zbierak;farma;suma;komendy;komendy_z;"];
+        const lines = ["plemie;gracz;pkt;zbierak;farma;suma;komendy;status_komend;"];
         for (const row of rows) {
             lines.push([
                 escapeCsv(row.tribe),
@@ -412,16 +445,15 @@
                 row.farm,
                 row.total,
                 row.commandAccess ? "WAHR" : "FALSCH",
-                row.commandSource,
+                escapeCsv(STATUS_LABELS[row.commandStatus] || row.commandStatus),
                 escapeCsv(row.note)
             ].join(";"));
         }
         return lines.join("\n");
     }
 
-    function buildHtml(rows) {
-        const missing = rows.filter(row => !row.commandAccess);
-        const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Komendy z", "Notatka"];
+    function buildHtml(rows, targetTribes) {
+        const header = ["Plemię", "Gracz", "Pkt", "Zbierak", "Farma", "Suma", "Komendy", "Status komend", "Notatka"];
         const cell = (row, value, numeric = false) => {
             const color = getTribeColor(row.target);
             const align = numeric ? "right" : "left";
@@ -436,7 +468,7 @@
                 cell(row, formatNumber(row.farm), true),
                 cell(row, formatNumber(row.total), true),
                 cell(row, row.commandAccess ? "WAHR" : "FALSCH"),
-                cell(row, row.commandSource),
+                cell(row, STATUS_LABELS[row.commandStatus] || row.commandStatus),
                 cell(row, row.note)
             ].join("")}</tr>`;
         };
@@ -446,10 +478,10 @@
                 <thead><tr>${header.map(column => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
                 <tbody>${tableRows.map(rowHtml).join("")}</tbody>
             </table>`;
-        const tribeTables = [...new Map(rows.map(row => [row.target.label, row.target])).values()]
+        const tribeTables = targetTribes
             .map(target => {
                 const tribeRows = rows.filter(row => row.target.index === target.index);
-                return table(`${target.label} members`, tribeRows);
+                return table(`${target.label} members (${tribeRows.length})`, tribeRows);
             })
             .join("");
 
@@ -467,7 +499,6 @@ th{background:#305496;color:#fff;font-weight:bold}
 </style>
 </head>
 <body>
-${missing.length ? table("Players who need friend/shared commands", missing) : ""}
 ${tribeTables}
 </body>
 </html>`;
@@ -538,7 +569,9 @@ ${tribeTables}
                 throw new Error("Enter at least one tribe tag/name");
             }
             state.targetAllies = new Map();
-            state.commandSource = new Map();
+            state.tribeCommandAccess = new Map();
+            state.friendStatus = new Map();
+            state.friendCommandAccess = new Map();
 
             setProgress("Reading world map tribe members");
             try {
@@ -549,18 +582,18 @@ ${tribeTables}
                 state.members = await getMembers();
             }
 
-            setProgress("Reading command access");
-            state.commandAccess = await getCommandAccess();
+            setProgress("Reading tribe command access");
+            await loadTribeCommandAccess();
 
             state.scavenge = await scanRanking("scavenge", targetTribes, state.settings.maxPages);
             state.farm = await scanFarm(targetTribes, state.settings.maxPages);
             await loadTargetTribeMembers();
 
             state.rows = buildRows(targetTribes);
-            await updateFriendCommandAccess(state.rows);
+            await checkOutsiderCommandStatus(state.rows);
             state.rows = buildRows(targetTribes);
             state.csvOutput = buildCsv(state.rows);
-            state.htmlOutput = buildHtml(state.rows);
+            state.htmlOutput = buildHtml(state.rows, targetTribes);
             setProgress(`Done: ${state.rows.length} rows`);
             showResult();
         } catch (error) {
@@ -617,7 +650,7 @@ ${tribeTables}
                             <input id="${NS}note" type="text" placeholder="optional">
                         </label>
                     </div>
-                    <label class="ch-check"><input id="${NS}friend_commands" type="checkbox" checked> Check friend/shared commands</label>
+                    <label class="ch-check"><input id="${NS}friend_commands" type="checkbox" checked> Check outside-tribe friend/command status</label>
                     <button id="${NS}start" type="button">Start export</button>
                     <div id="${NS}progress">Ready</div>
                 </div>
