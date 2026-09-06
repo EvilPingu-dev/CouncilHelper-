@@ -4,7 +4,7 @@
     const NS = "ch_export_";
     const BASE_URL = `${location.origin}/game.php`;
     const REQUEST_DELAY = 250;
-    const DEFAULT_MAX_PAGES = 200;
+    const DEFAULT_MAX_PAGES = 2000;
     const FARM_TYPES = ["loot_res", "loot", "loot_all"];
 
     const state = {
@@ -20,7 +20,6 @@
         htmlOutput: "",
         settings: {
             tribe: "",
-            maxPages: DEFAULT_MAX_PAGES,
             checkFriendCommands: true,
             falseCommandNote: ""
         }
@@ -560,7 +559,6 @@ ${tribeTables}
         startButton.disabled = true;
         try {
             state.settings.tribe = byId("tribe").value;
-            state.settings.maxPages = parseInt(byId("pages").value, 10) || DEFAULT_MAX_PAGES;
             state.settings.checkFriendCommands = byId("friend_commands").checked;
             state.settings.falseCommandNote = byId("note").value.trim();
 
@@ -585,8 +583,8 @@ ${tribeTables}
             setProgress("Reading tribe command access");
             await loadTribeCommandAccess();
 
-            state.scavenge = await scanRanking("scavenge", targetTribes, state.settings.maxPages);
-            state.farm = await scanFarm(targetTribes, state.settings.maxPages);
+            state.scavenge = await scanRanking("scavenge", targetTribes, DEFAULT_MAX_PAGES);
+            state.farm = await scanFarm(targetTribes, DEFAULT_MAX_PAGES);
             await loadTargetTribeMembers();
 
             state.rows = buildRows(targetTribes);
@@ -643,9 +641,6 @@ ${tribeTables}
                     <label for="${NS}tribe">Tribe tag/name filter</label>
                     <textarea id="${NS}tribe" rows="3" placeholder=":G:\n;G;"></textarea>
                     <div class="ch-row">
-                        <label>Ranking pages
-                            <input id="${NS}pages" type="number" min="1" max="200" value="${DEFAULT_MAX_PAGES}">
-                        </label>
                         <label>False command note
                             <input id="${NS}note" type="text" placeholder="optional">
                         </label>

@@ -38,4 +38,4 @@ Enter tags one per line, for example:
 ;G;
 ```
 
-The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), scans up to 200 daily scavenge and farm ranking pages by default, and reads command access from `screen=ally&mode=members_troops`. For players from other tribes, it also tries the same command page by player id so friend-shared command access can be detected when Tribal Wars exposes it.
+The script reads complete tribe rosters from Tribal Wars map data (`/map/ally.txt` and `/map/player.txt`), scans all daily scavenge and farm ranking pages until they run out, and reads command access from `screen=ally&mode=members_troops`. For players from other tribes, it also tries the same command page by player id so friend-shared command access can be detected when Tribal Wars exposes it.
