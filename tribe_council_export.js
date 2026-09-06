@@ -227,10 +227,10 @@
         return Boolean(row.querySelector('img[src*="confirm"]'));
     }
 
-    async function fetchCommandSharingRows(type) {
-        const doc = await fetchDoc(buildUrl({ screen: "settings", mode: "command_sharing", action: "command_sharing", type }));
+    function parseCommandSharingForm(form) {
         const rows = new Map();
-        for (const row of doc.querySelectorAll("table.vis tr")) {
+        if (!form) return rows;
+        for (const row of form.querySelectorAll("table.vis tr")) {
             const link = row.querySelector('a[href*="screen=info_player"]');
             const player = clean(link?.textContent);
             if (!player) continue;
@@ -240,16 +240,17 @@
     }
 
     async function loadCommandSharing() {
+        // GET requests with action=command_sharing&type=... get rejected as "Nieważna komenda";
+        // both tables are already present on the plain mode=command_sharing page
         try {
-            state.tribeShares = await fetchCommandSharingRows("ally");
+            const doc = await fetchDoc(buildUrl({ screen: "settings", mode: "command_sharing" }));
+            const forms = [...doc.querySelectorAll("form")];
+            state.tribeShares = parseCommandSharingForm(forms.find(form => form.getAttribute("action")?.includes("type=ally")));
+            state.buddyShares = state.settings.checkFriendCommands
+                ? parseCommandSharingForm(forms.find(form => form.getAttribute("action")?.includes("type=buddy")))
+                : new Map();
         } catch (error) {
-            console.warn("Tribe command_sharing page failed", error);
-        }
-        if (!state.settings.checkFriendCommands) return;
-        try {
-            state.buddyShares = await fetchCommandSharingRows("buddy");
-        } catch (error) {
-            console.warn("Friend command_sharing page failed", error);
+            console.warn("command_sharing page failed", error);
         }
     }
 
