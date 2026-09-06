@@ -4,7 +4,6 @@
     const NS = "ch_export_";
     const BASE_URL = `${location.origin}/game.php`;
     const REQUEST_DELAY = 250;
-    const DEFAULT_MAX_PAGES = 2000;
     const FARM_TYPES = ["loot_res", "loot", "loot_all"];
 
     const state = {
@@ -286,14 +285,12 @@
 
     function parseRankingRows(doc, targetTribes) {
         const rows = [];
-        let scannedRows = 0;
         const tables = [doc.querySelector("#in_a_day_ranking_table"), ...doc.querySelectorAll("table.vis")].filter(Boolean);
 
         for (const table of tables) {
             for (const row of table.querySelectorAll("tr")) {
                 const cells = row.querySelectorAll("td");
                 if (cells.length < 4) continue;
-                scannedRows++;
 
                 const playerLink = cells[1]?.querySelector('a[href*="screen=info_player"]');
                 const player = clean(playerLink?.textContent || cells[1]?.textContent);
@@ -319,16 +316,34 @@
             }
         }
 
-        return { rows, scannedRows };
+        return rows;
     }
 
-    async function scanRanking(type, targetTribes, maxPages) {
+    function highestRankOnPage(doc) {
+        const table = doc.querySelector("#in_a_day_ranking_table") || doc.querySelector("table.vis");
+        if (!table) return 0;
+        let maxRank = 0;
+        for (const cell of table.querySelectorAll("tr td:first-child")) {
+            const rank = parseNumber(cell.textContent);
+            if (rank > maxRank) maxRank = rank;
+        }
+        return maxRank;
+    }
+
+    async function countRankingEntries(type) {
+        // TW clamps out-of-range offsets to the last valid page, so this reveals the real total
+        const doc = await fetchDoc(buildUrl({ screen: "ranking", mode: "in_a_day", type, offset: 999999 }));
+        return highestRankOnPage(doc);
+    }
+
+    async function scanRanking(type, targetTribes) {
         const result = new Map();
-        for (let page = 0; page < maxPages; page++) {
-            setProgress(`Scanning ${type}, page ${page + 1}/${maxPages}`);
+        const totalEntries = await countRankingEntries(type);
+        const lastPage = totalEntries > 0 ? Math.floor((totalEntries - 1) / 25) : 0;
+        for (let page = 0; page <= lastPage; page++) {
+            setProgress(`Scanning ${type}, page ${page + 1}/${lastPage + 1}`);
             const doc = await fetchDoc(buildUrl({ screen: "ranking", mode: "in_a_day", type, offset: page * 25 }));
-            const { rows, scannedRows } = parseRankingRows(doc, targetTribes);
-            if (!scannedRows) break;
+            const rows = parseRankingRows(doc, targetTribes);
             for (const row of rows) {
                 if (!result.has(row.player) || row.points > result.get(row.player).points) {
                     result.set(row.player, row);
@@ -339,22 +354,20 @@
         return result;
     }
 
-    async function scanFarm(targetTribes, maxPages) {
-        let best = new Map();
+    async function scanFarm(targetTribes) {
         let bestType = FARM_TYPES[0];
+        let bestSampleSize = -1;
         for (const type of FARM_TYPES) {
-            const data = await scanRanking(type, targetTribes, Math.min(maxPages, 8));
-            if (data.size > best.size) {
-                best = data;
+            const doc = await fetchDoc(buildUrl({ screen: "ranking", mode: "in_a_day", type, offset: 0 }));
+            const rows = parseRankingRows(doc, targetTribes);
+            if (rows.length > bestSampleSize) {
+                bestSampleSize = rows.length;
                 bestType = type;
             }
-            if (data.size > 0) break;
+            if (rows.length > 0) break;
+            await wait(REQUEST_DELAY);
         }
-
-        if (maxPages > 8) {
-            best = await scanRanking(bestType, targetTribes, maxPages);
-        }
-        return best;
+        return scanRanking(bestType, targetTribes);
     }
 
     function getTribeColor(target) {
@@ -435,6 +448,11 @@
             const align = numeric ? "right" : "left";
             return `<td bgcolor="${color}" style="background-color:${color};text-align:${align}">${escapeHtml(value)}</td>`;
         };
+        const checkboxCell = row => {
+            const color = getTribeColor(row.target);
+            const checked = row.commandAccess ? " checked" : "";
+            return `<td bgcolor="${color}" style="background-color:${color};text-align:center"><input type="checkbox"${checked} disabled></td>`;
+        };
         const rowHtml = row => {
             return `<tr>${[
                 cell(row, row.tribe),
@@ -443,7 +461,7 @@
                 cell(row, formatNumber(row.scavenge), true),
                 cell(row, formatNumber(row.farm), true),
                 cell(row, formatNumber(row.total), true),
-                cell(row, row.commandAccess ? "WAHR" : "FALSCH"),
+                checkboxCell(row),
                 cell(row, STATUS_LABELS[row.commandStatus] || row.commandStatus),
                 cell(row, row.note)
             ].join("")}</tr>`;
@@ -559,8 +577,8 @@ ${tribeTables}
             setProgress("Reading command sharing settings");
             await loadCommandSharing();
 
-            state.scavenge = await scanRanking("scavenge", targetTribes, DEFAULT_MAX_PAGES);
-            state.farm = await scanFarm(targetTribes, DEFAULT_MAX_PAGES);
+            state.scavenge = await scanRanking("scavenge", targetTribes);
+            state.farm = await scanFarm(targetTribes);
             await loadTargetTribeMembers();
 
             state.rows = buildRows(targetTribes);
