@@ -289,7 +289,8 @@
 
     function parseRankingRows(doc, targetTribes) {
         const rows = [];
-        const tables = [doc.querySelector("#in_a_day_ranking_table"), ...doc.querySelectorAll("table.vis")].filter(Boolean);
+        const rankingTable = doc.querySelector("#in_a_day_ranking_table");
+        const tables = rankingTable ? [rankingTable] : [...doc.querySelectorAll("table.vis")];
 
         for (const table of tables) {
             for (const row of table.querySelectorAll("tr")) {
@@ -340,9 +341,9 @@
         return highestRankOnPage(doc);
     }
 
-    async function scanRanking(type, targetTribes) {
+    async function scanRanking(type, targetTribes, knownTotal) {
         const result = new Map();
-        const totalEntries = await countRankingEntries(type);
+        const totalEntries = knownTotal === undefined ? await countRankingEntries(type) : knownTotal;
         const lastPage = totalEntries > 0 ? Math.floor((totalEntries - 1) / 25) : 0;
         for (let page = 0; page <= lastPage; page++) {
             setProgress(`Scanning ${type}, page ${page + 1}/${lastPage + 1}`);
@@ -359,19 +360,20 @@
     }
 
     async function scanFarm(targetTribes) {
-        let bestType = FARM_TYPES[0];
-        let bestSampleSize = -1;
+        // invalid farm types still render a table, so pick by real ranked-entry count
+        let bestType = null;
+        let bestEntries = 0;
         for (const type of FARM_TYPES) {
-            const doc = await fetchDoc(buildUrl({ screen: "ranking", mode: "in_a_day", type, offset: 0 }));
-            const rows = parseRankingRows(doc, targetTribes);
-            if (rows.length > bestSampleSize) {
-                bestSampleSize = rows.length;
+            setProgress(`Checking farm ranking type ${type}`);
+            const entries = await countRankingEntries(type);
+            if (entries > bestEntries) {
+                bestEntries = entries;
                 bestType = type;
             }
-            if (rows.length > 0) break;
             await wait(REQUEST_DELAY);
         }
-        return scanRanking(bestType, targetTribes);
+        if (!bestType) return new Map();
+        return scanRanking(bestType, targetTribes, bestEntries);
     }
 
     function getTribeColor(target) {
